@@ -12,13 +12,22 @@ Syntax
 
 * ID, group-ID are documented in :doc:`fix <fix>` command
 * nve/spin = style name of this fix command
-* keyword = *lattice*
+* zero or more keyword/value pairs may be appended
+* keyword = *lattice* or *integrator* or *iterations* or *tol*
 
   .. parsed-literal::
 
        *lattice* value = *moving* or *frozen*
          moving = integrate both spin and atomic degrees of freedom
          frozen = integrate spins on a fixed lattice
+       *integrator* value = *sequential* or *midpoint*
+         sequential = update the spins one after the other
+         midpoint = update all spins at once with the implicit midpoint rule
+       *iterations* value = N
+         N = number of field evaluations per spin update (*midpoint* only)
+       *tol* value = tolerance
+         tolerance = stop the iterations when no spin component changes by more
+                     than this value (*midpoint* only; 0.0 = always do N iterations)
 
 Examples
 """"""""
@@ -27,6 +36,8 @@ Examples
 
    fix 3 all nve/spin lattice moving
    fix 1 all nve/spin lattice frozen
+   fix 1 all nve/spin lattice moving integrator midpoint
+   fix 1 all nve/spin integrator midpoint iterations 20 tol 1.0e-12
 
 Description
 """""""""""
@@ -72,6 +83,77 @@ Sectors are only created in directions divided between processors
 includes the neighbor skin, and it is checked again whenever the
 sub-domains change.
 
+The sequential update of the spins described above is the default
+(*integrator sequential*).  Since the spins of one sector have to be
+updated before those of the next one, the spin update requires about 30
+exchanges of data between processors per timestep, which limits the
+parallel efficiency when there are few atoms per processor.
+
+.. versionadded:: TBD
+
+   *integrator midpoint*, *iterations*, and *tol* keywords
+
+With *integrator midpoint*, each of the two spin updates per timestep
+(over half a timestep, :math:`h = \Delta t/2`) is done for all spins at
+once with the implicit midpoint rule
+
+.. math::
+
+   \vec{s}_i(t+h) = \vec{s}_i(t) + h \, \vec{\omega}_i(\vec{m}) \times \vec{m}_i,
+   \qquad \vec{m} = \frac{\vec{s}(t) + \vec{s}(t+h)}{2}
+
+where :math:`\vec{\omega}_i(\vec{m})` is the magnetic field (precession
+vector) acting on spin *i*, computed from the midpoint values of all
+spins.  The new spin is obtained as a rotation of the old one, so that
+the length of each spin is preserved exactly.  The equation is solved by
+iteration: each iteration computes the fields of all spins from the
+current estimate of the midpoints and updates all spins.  The *iterations*
+keyword sets the number of iterations (field evaluations), and the *tol*
+keyword optionally stops the iterations earlier once no spin component
+changes by more than *tol* (this requires an extra global sum per
+iteration).  If the iterations do not converge to *tol*, a warning is
+printed.  For timesteps of about 0.1 fs in bcc iron, each iteration
+changes the spins about two orders of magnitude less than the previous
+one, so that the default of 4 iterations solves the equation to nearly
+round-off.  The change of the spins in the last iteration can be
+monitored (see below) to check this for other systems and timesteps.
+
+When the equation is solved exactly, the implicit midpoint rule conserves
+the magnetic energy for interactions that are quadratic in the spins
+(e.g., exchange, DMI, anisotropy, Zeeman) and the total magnetization for
+isotropic exchange :ref:`(Hairer) <Hairer1>`.  Like the sequential update,
+it is second order in the timestep, and time-reversible when solved
+exactly.  It needs more field evaluations per timestep than the
+sequential update (8 instead of 4 with the default settings), but only
+one exchange of data between processors per iteration, and no sectors:
+there is no restriction on the size of the processor sub-domains, any
+processor grid or
+:doc:`comm_style tiled <comm_style>` can be used, and the result does
+not depend on the number of processors (except for round-off).  This
+can make it faster than the sequential update when running with few atoms
+per processor.
+
+----------
+
+Restart, fix_modify, output, run start/stop, minimize info
+"""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
+
+No information about this fix is written to :doc:`binary restart files
+<restart>`.  None of the :doc:`fix_modify <fix_modify>` options are
+relevant to this fix.
+
+With *integrator midpoint*, this fix computes a global vector of length
+2, which can be accessed by various :doc:`output commands
+<Howto_output>`.  The first element is the number of field evaluations
+per spin during the last timestep (for both spin updates), the second
+element is the largest change of a spin component in the last iteration.
+These values are "intensive".  No global or per-atom quantities are
+stored by this fix with *integrator sequential*.
+
+No parameter of this fix can be used with the *start/stop* keywords of
+the :doc:`run <run>` command.  This fix is not invoked during
+:doc:`energy minimization <minimize>`.
+
 ----------
 
 Restrictions
@@ -103,7 +185,12 @@ with the settings
 With other settings (e.g. *every* > 1, *delay* > 0, or *once* yes), a
 warning is printed, and another one if atoms did move too far during the
 run (i.e. if there are "dangerous builds"), since then spins of atoms on
-different processors may have been updated in the wrong order.
+different processors may have been updated in the wrong order.  This
+does not apply to *integrator midpoint*.
+
+*Integrator midpoint* cannot be used with :doc:`fix langevin/spin
+<fix_langevin_spin>` at a non-zero temperature yet (transverse damping
+is supported).
 
 Related commands
 """"""""""""""""
@@ -113,7 +200,8 @@ Related commands
 Default
 """""""
 
-The option default is lattice = moving.
+The option defaults are lattice = moving, integrator = sequential,
+iterations = 4, and tol = 0.0.
 
 ----------
 
@@ -126,3 +214,8 @@ The option default is lattice = moving.
 
 **(Tranchida)** Tranchida, Plimpton, Thibaudeau and Thompson,
 Journal of Computational Physics, 372, 406-425, (2018).
+
+.. _Hairer1:
+
+**(Hairer)** Hairer, Lubich, and Wanner, Geometric Numerical
+Integration, 2nd edition, Springer (2006), Chapter IV.

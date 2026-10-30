@@ -66,6 +66,7 @@ FixNVESpin::FixNVESpin(LAMMPS *lmp, int narg, char **arg) :
   Fix(lmp, narg, arg),
   pair(nullptr), spin_pairs(nullptr), locklangevinspin(nullptr),
   locksetforcespin(nullptr), lockprecessionspin(nullptr),
+  sp_old(nullptr), sp_new(nullptr),
   rsec(nullptr), stack_head(nullptr), stack_foot(nullptr),
   backward_stacks(nullptr), forward_stacks(nullptr)
 {
@@ -85,14 +86,19 @@ FixNVESpin::FixNVESpin(LAMMPS *lmp, int narg, char **arg) :
   nsectors = 0;
   secdim[0] = secdim[1] = secdim[2] = 0;
 
+  integrator = SEQUENTIAL;
+  niter = 4;
+  tol = 0.0;
+  nmid_max = 0;
+  nevals_step = 0;
+  resid_local = 0.0;
+  nfail_warn = 0;
+
   // checking if map array or hash is defined
 
   if (atom->map_style == Atom::MAP_NONE)
     error->all(FLERR,"Fix nve/spin requires an atom map, see atom_modify");
 
-  // define sector_flag
-
-  sector_flag = (comm->nprocs > 1) ? 1 : 0;
   danger_flag = 0;
 
   // defining lattice_flag
@@ -111,7 +117,37 @@ FixNVESpin::FixNVESpin(LAMMPS *lmp, int narg, char **arg) :
         lattice_flag = 1;
       else error->all(FLERR,"Illegal fix/nve/spin command");
       iarg += 2;
+    } else if (strcmp(arg[iarg],"integrator") == 0) {
+      if (iarg+2 > narg) utils::missing_cmd_args(FLERR, "fix nve/spin integrator", error);
+      if (strcmp(arg[iarg+1],"sequential") == 0) integrator = SEQUENTIAL;
+      else if (strcmp(arg[iarg+1],"midpoint") == 0) integrator = MIDPOINT;
+      else error->all(FLERR, iarg+1, "Unknown fix nve/spin integrator {}", arg[iarg+1]);
+      iarg += 2;
+    } else if (strcmp(arg[iarg],"iterations") == 0) {
+      if (iarg+2 > narg) utils::missing_cmd_args(FLERR, "fix nve/spin iterations", error);
+      niter = utils::inumeric(FLERR,arg[iarg+1],false,lmp);
+      if (niter < 1)
+        error->all(FLERR, iarg+1, "Fix nve/spin iterations must be at least 1");
+      iarg += 2;
+    } else if (strcmp(arg[iarg],"tol") == 0) {
+      if (iarg+2 > narg) utils::missing_cmd_args(FLERR, "fix nve/spin tol", error);
+      tol = utils::numeric(FLERR,arg[iarg+1],false,lmp);
+      if (tol < 0.0) error->all(FLERR, iarg+1, "Fix nve/spin tol must not be negative");
+      iarg += 2;
     } else error->all(FLERR,"Illegal fix/nve/spin command");
+  }
+
+  // the sectoring algorithm is only needed for the sequential integrator in parallel
+
+  sector_flag = ((comm->nprocs > 1) && (integrator == SEQUENTIAL)) ? 1 : 0;
+
+  // iteration statistics of the midpoint integrator
+
+  if (integrator == MIDPOINT) {
+    vector_flag = 1;
+    size_vector = 2;
+    global_freq = 1;
+    extvector = 0;
   }
 
   // check if the atom/spin style is defined
@@ -138,6 +174,8 @@ FixNVESpin::~FixNVESpin()
   memory->destroy(stack_foot);
   memory->destroy(forward_stacks);
   memory->destroy(backward_stacks);
+  memory->destroy(sp_old);
+  memory->destroy(sp_new);
   delete [] spin_pairs;
   delete [] locklangevinspin;
   delete [] lockprecessionspin;
@@ -260,6 +298,19 @@ void FixNVESpin::init()
     locksetforcespin = dynamic_cast<FixSetForceSpin *>(setforcefixes.back());
   }
 
+  // the random field of fix langevin/spin is drawn anew for every field
+  //   evaluation, which is inconsistent with the iterations of the midpoint integrator
+
+  if (integrator == MIDPOINT)
+    for (int i = 0; i < nlangspin; i++)
+      if (locklangevinspin[i]->temp_flag)
+        error->all(FLERR, Error::NOLASTLINE, "Fix nve/spin integrator midpoint does not "
+                   "support fix langevin/spin with a non-zero temperature yet");
+
+  nevals_step = 0;
+  resid_local = 0.0;
+  nfail_warn = 0;
+
   // setting the sector variables/lists
 
   nsectors = 0;
@@ -332,7 +383,10 @@ void FixNVESpin::initial_integrate(int /*vflag*/)
   //   only ghosts of that sector are out of date then, and atoms of a sector
   //   never interact with ghosts of the same sector on other processors
 
-  if (sector_flag) {                            // sectoring seq. update
+  nevals_step = 0;
+  if (integrator == MIDPOINT) {                 // all spins at once
+    MidpointSpinStep(0.5 * update->dt);
+  } else if (sector_flag) {                     // sectoring seq. update
     for (int j = 0; j < nsectors; j++) {        // advance quarter s for nlocal
       if (j == 0) comm->forward_comm();
       else comm->forward_comm(this);
@@ -390,7 +444,9 @@ void FixNVESpin::initial_integrate(int /*vflag*/)
   // ghost positions have changed: communicate them (and spins) once,
   //   then only ghost spins (none before the backward update of the last sector)
 
-  if (sector_flag) {                            // sectoring seq. update
+  if (integrator == MIDPOINT) {                 // all spins at once
+    MidpointSpinStep(0.5 * update->dt);
+  } else if (sector_flag) {                     // sectoring seq. update
     for (int j = 0; j < nsectors; j++) {        // advance quarter s for nlocal
       if (j == 0) comm->forward_comm();
       else comm->forward_comm(this);
@@ -671,6 +727,37 @@ int FixNVESpin::coords2sector(double *x)
 }
 
 /* ----------------------------------------------------------------------
+   rotate the spin s about the field fm during a time dts:
+   g = s + dts/2 fm x (s + g) (Cayley transform), so that |g| = |s|
+---------------------------------------------------------------------- */
+
+static void RotateSpin(const double *s, const double *fm, double dts, double *g)
+{
+  double fm2,energy,dts2;
+  double cp[3];
+
+  fm2 = (fm[0]*fm[0])+(fm[1]*fm[1])+(fm[2]*fm[2]);
+  energy = (s[0]*fm[0])+(s[1]*fm[1])+(s[2]*fm[2]);
+  dts2 = dts*dts;
+
+  cp[0] = fm[1]*s[2] - fm[2]*s[1];
+  cp[1] = fm[2]*s[0] - fm[0]*s[2];
+  cp[2] = fm[0]*s[1] - fm[1]*s[0];
+
+  g[0] = s[0] + cp[0]*dts;
+  g[1] = s[1] + cp[1]*dts;
+  g[2] = s[2] + cp[2]*dts;
+
+  g[0] += (fm[0]*energy - 0.5*s[0]*fm2)*0.5*dts2;
+  g[1] += (fm[1]*energy - 0.5*s[1]*fm2)*0.5*dts2;
+  g[2] += (fm[2]*energy - 0.5*s[2]*fm2)*0.5*dts2;
+
+  g[0] /= (1.0 + 0.25*fm2*dts2);
+  g[1] /= (1.0 + 0.25*fm2*dts2);
+  g[2] /= (1.0 + 0.25*fm2*dts2);
+}
+
+/* ----------------------------------------------------------------------
    advance the spin i of a timestep dts
 ---------------------------------------------------------------------- */
 
@@ -680,42 +767,13 @@ void FixNVESpin::AdvanceSingleSpin(int i)
   int *sametag = atom->sametag;
   double **sp = atom->sp;
   double **fm = atom->fm;
-  double fm2,energy,dts2;
-  double cp[3],g[3];
+  double g[3];
 
-  cp[0] = cp[1] = cp[2] = 0.0;
-  g[0] = g[1] = g[2] = 0.0;
-  fm2 = (fm[i][0]*fm[i][0])+(fm[i][1]*fm[i][1])+(fm[i][2]*fm[i][2]);
-  energy = (sp[i][0]*fm[i][0])+(sp[i][1]*fm[i][1])+(sp[i][2]*fm[i][2]);
-  dts2 = dts*dts;
-
-  cp[0] = fm[i][1]*sp[i][2] - fm[i][2]*sp[i][1];
-  cp[1] = fm[i][2]*sp[i][0] - fm[i][0]*sp[i][2];
-  cp[2] = fm[i][0]*sp[i][1] - fm[i][1]*sp[i][0];
-
-  g[0] = sp[i][0] + cp[0]*dts;
-  g[1] = sp[i][1] + cp[1]*dts;
-  g[2] = sp[i][2] + cp[2]*dts;
-
-  g[0] += (fm[i][0]*energy - 0.5*sp[i][0]*fm2)*0.5*dts2;
-  g[1] += (fm[i][1]*energy - 0.5*sp[i][1]*fm2)*0.5*dts2;
-  g[2] += (fm[i][2]*energy - 0.5*sp[i][2]*fm2)*0.5*dts2;
-
-  g[0] /= (1.0 + 0.25*fm2*dts2);
-  g[1] /= (1.0 + 0.25*fm2*dts2);
-  g[2] /= (1.0 + 0.25*fm2*dts2);
+  RotateSpin(sp[i],fm[i],dts,g);
 
   sp[i][0] = g[0];
   sp[i][1] = g[1];
   sp[i][2] = g[2];
-
-  // renormalization (check if necessary)
-
-  // msq = g[0]*g[0] + g[1]*g[1] + g[2]*g[2];
-  // scale = 1.0/sqrt(msq);
-  // sp[i][0] *= scale;
-  // sp[i][1] *= scale;
-  // sp[i][2] *= scale;
 
   // comm. sp[i] to atoms with same tag (periodic images on this proc)
   // needed for the serial algo, and for the sectoring algo in directions
@@ -731,6 +789,118 @@ void FixNVESpin::AdvanceSingleSpin(int i)
     }
   }
 
+}
+
+/* ----------------------------------------------------------------------
+   advance all spins by a time h with the implicit midpoint rule:
+     s_i(h) = s_i(0) + h fm_i(m) x m_i,  m = (s(0) + s(h)) / 2
+   written as a rotation of s_i(0) about fm_i(m) (exact spin length),
+   and solved by fixed-point iteration, starting from s(h) = s(0).
+   Each iteration evaluates the field of all local spins from the
+   midpoints of the previous iterate, so all spins can be updated at
+   once and only the ghost spins need to be communicated.
+   For a spin energy that is a quadratic function of the spins (exchange,
+   DMI, anisotropy, ...), the converged scheme conserves it exactly.
+---------------------------------------------------------------------- */
+
+void FixNVESpin::MidpointSpinStep(double h)
+{
+  double **sp = atom->sp;
+  double **fm = atom->fm;
+  int *mask = atom->mask;
+  int nlocal = atom->nlocal;
+  if (igroup == atom->firstgroup) nlocal = atom->nfirst;
+
+  if (atom->nmax > nmid_max) {
+    nmid_max = atom->nmax;
+    memory->grow(sp_old,nmid_max,3,"nve/spin:sp_old");
+    memory->grow(sp_new,nmid_max,3,"nve/spin:sp_new");
+  }
+
+  // positions may have changed since the last comm:
+  //   communicate positions and spins of ghost atoms
+
+  comm->forward_comm();
+
+  for (int i = 0; i < nlocal; i++) {
+    sp_old[i][0] = sp_new[i][0] = sp[i][0];
+    sp_old[i][1] = sp_new[i][1] = sp[i][1];
+    sp_old[i][2] = sp_new[i][2] = sp[i][2];
+  }
+
+  // atom->sp holds the midpoints of the current iterate during the iterations
+  //   (sp_old in the first iteration)
+
+  double g[3], resid = 0.0;
+  int nevals = 0;
+  int converged = 0;
+  while (true) {
+    resid = 0.0;
+    for (int i = 0; i < nlocal; i++) {
+      if (mask[i] & groupbit) {
+        ComputeInteractionsSpin(i);
+        RotateSpin(sp_old[i],fm[i],h,g);
+        for (int k = 0; k < 3; k++) {
+          resid = MAX(resid,fabs(g[k] - sp_new[i][k]));
+          sp_new[i][k] = g[k];
+        }
+      }
+    }
+    nevals++;
+
+    if (tol > 0.0) {
+      double resid_all;
+      MPI_Allreduce(&resid,&resid_all,1,MPI_DOUBLE,MPI_MAX,world);
+      if (resid_all < tol) {
+        converged = 1;
+        break;
+      }
+    }
+    if (nevals >= niter) break;
+
+    for (int i = 0; i < nlocal; i++) {
+      if (mask[i] & groupbit) {
+        sp[i][0] = 0.5 * (sp_old[i][0] + sp_new[i][0]);
+        sp[i][1] = 0.5 * (sp_old[i][1] + sp_new[i][1]);
+        sp[i][2] = 0.5 * (sp_old[i][2] + sp_new[i][2]);
+      }
+    }
+    comm->forward_comm(this);
+  }
+
+  // final spins of local atoms
+  // ghost spins are updated by the next comm of positions and spins
+
+  for (int i = 0; i < nlocal; i++) {
+    sp[i][0] = sp_new[i][0];
+    sp[i][1] = sp_new[i][1];
+    sp[i][2] = sp_new[i][2];
+  }
+
+  nevals_step += nevals;
+  resid_local = resid;
+
+  if ((tol > 0.0) && !converged && !nfail_warn) {
+    nfail_warn = 1;
+    if (comm->me == 0)
+      error->warning(FLERR, "Fix nve/spin midpoint integrator: the spins did not converge to "
+                     "tol = {} within {} iterations at step {}. Increase the number of "
+                     "iterations or reduce the timestep", tol, niter, update->ntimestep);
+  }
+}
+
+/* ----------------------------------------------------------------------
+   output: number of field evaluations per spin in the last timestep, and
+   largest change of a spin component in the last iteration of the
+   midpoint integrator
+---------------------------------------------------------------------- */
+
+double FixNVESpin::compute_vector(int n)
+{
+  if (n == 0) return (double) nevals_step;
+  double resid_all = 0.0;
+  MPI_Allreduce(&resid_local,&resid_all,1,MPI_DOUBLE,MPI_MAX,world);
+  return resid_all;
 }
 
 /* ---------------------------------------------------------------------- */

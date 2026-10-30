@@ -14,9 +14,11 @@
 #include "library.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <mpi.h>
 #include <string>
+#include <vector>
 
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
@@ -62,7 +64,8 @@ protected:
 
     // bcc iron with random spins, exchange interaction only, frozen lattice
 
-    void init_bcc(int nx, int ny, int nz, const std::string &procs)
+    void init_bcc(int nx, int ny, int nz, const std::string &procs,
+                  const std::string &nveopt = "")
     {
         command("units           metal");
         command("atom_style      spin");
@@ -78,7 +81,7 @@ protected:
         command("pair_style      spin/exchange 3.5");
         command("pair_coeff      * * exchange 3.4 0.02726 0.2171 1.841");
         command("neighbor        0.1 bin");
-        command("fix             1 all nve/spin lattice frozen");
+        command("fix             1 all nve/spin lattice frozen " + nveopt);
         command("timestep        0.0005");
         command("thermo_style    custom step pe etotal");
     }
@@ -119,6 +122,29 @@ protected:
             maxerr = std::max(maxerr, std::fabs(lammps_get_thermo(lmp, "etotal") - e0));
         }
         return maxerr;
+    }
+
+    // all spin directions, ordered by atom position (atom IDs from
+    // create_atoms depend on the processor grid; the lattice is frozen)
+
+    std::vector<std::array<double, 6>> gather_spins()
+    {
+        const int natoms = (int)lammps_get_natoms(lmp);
+        std::vector<double> x(3 * natoms), sp(4 * natoms);
+        lammps_gather_atoms(lmp, "x", 1, 3, x.data());
+        lammps_gather_atoms(lmp, "sp", 1, 4, sp.data());
+        std::vector<std::array<double, 6>> spins(natoms);
+        for (int i = 0; i < natoms; ++i)
+            spins[i] = {x[3 * i],  x[3 * i + 1],  x[3 * i + 2],
+                        sp[4 * i], sp[4 * i + 1], sp[4 * i + 2]};
+        std::sort(spins.begin(), spins.end());
+        return spins;
+    }
+
+    void restart_lammps()
+    {
+        TearDown();
+        SetUp();
     }
 };
 
@@ -170,5 +196,71 @@ TEST_F(FixNVESpinMPITest, too_thin)
     if (!verbose) ::testing::internal::GetCapturedStdout();
     EXPECT_THAT(mesg, HasSubstr("Processor sub-domain of fix nve/spin is"));
     EXPECT_THAT(mesg, HasSubstr("wide in x direction"));
+}
+// midpoint integrator: no restriction on the sub-domain size, and the
+// converged scheme conserves the (quadratic) exchange energy exactly
+
+TEST_F(FixNVESpinMPITest, midpoint_energy)
+{
+    if (!verbose) ::testing::internal::CaptureStdout();
+    init_bcc(6, 6, 6, "4 1 1", "integrator midpoint tol 1e-14 iterations 50");
+    const double err = max_energy_error(4, 50);
+    if (!verbose) ::testing::internal::GetCapturedStdout();
+    EXPECT_LT(err, EPSILON_ENERGY);
+}
+
+// midpoint integrator: the spins do not depend on the processor grid
+// (only on the summation order of the fields, i.e. round-off)
+
+TEST_F(FixNVESpinMPITest, midpoint_grid)
+{
+    if (!verbose) ::testing::internal::CaptureStdout();
+    init_bcc(6, 6, 6, "2 2 1", "integrator midpoint");
+    command("run 200 post no");
+    const auto sp1 = gather_spins();
+    if (!verbose) ::testing::internal::GetCapturedStdout();
+    restart_lammps();
+    if (!verbose) ::testing::internal::CaptureStdout();
+    init_bcc(6, 6, 6, "1 1 4", "integrator midpoint");
+    command("run 200 post no");
+    const auto sp2 = gather_spins();
+    if (!verbose) ::testing::internal::GetCapturedStdout();
+
+    ASSERT_EQ(sp1.size(), sp2.size());
+    double maxdiff = 0.0;
+    for (std::size_t i = 0; i < sp1.size(); ++i)
+        for (int k = 0; k < 6; ++k)
+            maxdiff = std::max(maxdiff, std::fabs(sp1[i][k] - sp2[i][k]));
+    EXPECT_LT(maxdiff, 1.0e-10);
+}
+
+// midpoint integrator: iteration statistics (2 x 4 field evaluations per step
+// by default, all 2 x iterations without tol)
+
+TEST_F(FixNVESpinMPITest, midpoint_vector)
+{
+    if (!verbose) ::testing::internal::CaptureStdout();
+    init_bcc(6, 6, 6, "2 2 1", "integrator midpoint");
+    command("run 10 post no");
+    auto *nevals = (double *)lammps_extract_fix(lmp, "1", LMP_STYLE_GLOBAL, LMP_TYPE_VECTOR, 0, 0);
+    auto *resid  = (double *)lammps_extract_fix(lmp, "1", LMP_STYLE_GLOBAL, LMP_TYPE_VECTOR, 1, 0);
+    const double n1 = *nevals, r1 = *resid;
+    lammps_free(nevals);
+    lammps_free(resid);
+    command("unfix 1");
+    command("fix 1 all nve/spin lattice frozen integrator midpoint iterations 30 tol 1e-12");
+    command("run 10 post no");
+    nevals = (double *)lammps_extract_fix(lmp, "1", LMP_STYLE_GLOBAL, LMP_TYPE_VECTOR, 0, 0);
+    resid  = (double *)lammps_extract_fix(lmp, "1", LMP_STYLE_GLOBAL, LMP_TYPE_VECTOR, 1, 0);
+    const double n2 = *nevals, r2 = *resid;
+    lammps_free(nevals);
+    lammps_free(resid);
+    if (!verbose) ::testing::internal::GetCapturedStdout();
+
+    EXPECT_DOUBLE_EQ(n1, 8.0);
+    EXPECT_GT(r1, 0.0);
+    EXPECT_LT(r1, 1.0e-6);
+    EXPECT_LT(n2, 60.0);
+    EXPECT_LT(r2, 1.0e-12);
 }
 } // namespace LAMMPS_NS
