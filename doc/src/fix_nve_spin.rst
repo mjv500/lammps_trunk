@@ -133,6 +133,15 @@ not depend on the number of processors (except for round-off).  This
 can make it faster than the sequential update when running with few atoms
 per processor.
 
+With :doc:`fix langevin/spin <fix_langevin_spin>` at a non-zero
+temperature, the random field of each spin is drawn once per spin update
+(of length :math:`h`) and kept fixed during the iterations, with an
+amplitude for a time interval :math:`h`.  This corresponds to the
+Stratonovich interpretation of the stochastic equation of motion
+:ref:`(Mentink) <Mentink1>`.  The random numbers then differ from those
+of the sequential update, and with several processors also between
+different numbers of processors.
+
 ----------
 
 Restart, fix_modify, output, run start/stop, minimize info
@@ -188,10 +197,6 @@ run (i.e. if there are "dangerous builds"), since then spins of atoms on
 different processors may have been updated in the wrong order.  This
 does not apply to *integrator midpoint*.
 
-*Integrator midpoint* cannot be used with :doc:`fix langevin/spin
-<fix_langevin_spin>` at a non-zero temperature yet (transverse damping
-is supported).
-
 Related commands
 """"""""""""""""
 
@@ -219,3 +224,8 @@ Journal of Computational Physics, 372, 406-425, (2018).
 
 **(Hairer)** Hairer, Lubich, and Wanner, Geometric Numerical
 Integration, 2nd edition, Springer (2006), Chapter IV.
+
+.. _Mentink1:
+
+**(Mentink)** Mentink, Tretyakov, Fasolino, Katsnelson, and Rasing,
+J Phys Condens Matter, 22, 176001 (2010).

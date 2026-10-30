@@ -66,6 +66,7 @@ class FixNVESpin : public Fix {
   int nmid_max;        // size of sp_old, sp_new
   double **sp_old;     // spins at the beginning of a midpoint spin step
   double **sp_new;     // current iterate of the spins at the end of the step
+  double **noise;      // random fields of fix langevin/spin, fixed during a midpoint step
   int nevals_step;     // field evaluations in the last timestep
   double resid_local;  // change of the local spins in the last iteration
   int nfail_warn;      // 1 if the warning about non-converged iterations was printed

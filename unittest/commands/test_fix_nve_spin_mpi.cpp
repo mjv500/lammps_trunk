@@ -263,4 +263,39 @@ TEST_F(FixNVESpinMPITest, midpoint_vector)
     EXPECT_LT(n2, 60.0);
     EXPECT_LT(r2, 1.0e-12);
 }
+// midpoint integrator with fix langevin/spin: the random field is drawn once per
+// spin update and kept fixed during the iterations, so converged runs with
+// different iteration settings give the same spins (with the same seed and grid),
+// and the spin length is preserved
+
+TEST_F(FixNVESpinMPITest, midpoint_langevin)
+{
+    if (!verbose) ::testing::internal::CaptureStdout();
+    init_bcc(6, 6, 6, "2 2 1", "integrator midpoint tol 1e-14 iterations 50");
+    command("fix 2 all precession/spin zeeman 0.0 0.0 0.0 1.0");
+    command("fix 3 all langevin/spin 300.0 0.1 4711");
+    command("run 50 post no");
+    const auto sp1 = gather_spins();
+    if (!verbose) ::testing::internal::GetCapturedStdout();
+    restart_lammps();
+    if (!verbose) ::testing::internal::CaptureStdout();
+    init_bcc(6, 6, 6, "2 2 1", "integrator midpoint tol 1e-13 iterations 40");
+    command("fix 2 all precession/spin zeeman 0.0 0.0 0.0 1.0");
+    command("fix 3 all langevin/spin 300.0 0.1 4711");
+    command("run 50 post no");
+    const auto sp2 = gather_spins();
+    if (!verbose) ::testing::internal::GetCapturedStdout();
+
+    ASSERT_EQ(sp1.size(), sp2.size());
+    double maxdiff = 0.0, maxnorm = 0.0;
+    for (std::size_t i = 0; i < sp1.size(); ++i) {
+        for (int k = 3; k < 6; ++k)
+            maxdiff = std::max(maxdiff, std::fabs(sp1[i][k] - sp2[i][k]));
+        const double norm =
+            sqrt(sp1[i][3] * sp1[i][3] + sp1[i][4] * sp1[i][4] + sp1[i][5] * sp1[i][5]);
+        maxnorm = std::max(maxnorm, std::fabs(norm - 1.0));
+    }
+    EXPECT_LT(maxdiff, 1.0e-9);
+    EXPECT_LT(maxnorm, 1.0e-12);
+}
 } // namespace LAMMPS_NS

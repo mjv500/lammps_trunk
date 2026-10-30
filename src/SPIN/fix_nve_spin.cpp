@@ -66,7 +66,7 @@ FixNVESpin::FixNVESpin(LAMMPS *lmp, int narg, char **arg) :
   Fix(lmp, narg, arg),
   pair(nullptr), spin_pairs(nullptr), locklangevinspin(nullptr),
   locksetforcespin(nullptr), lockprecessionspin(nullptr),
-  sp_old(nullptr), sp_new(nullptr),
+  sp_old(nullptr), sp_new(nullptr), noise(nullptr),
   rsec(nullptr), stack_head(nullptr), stack_foot(nullptr),
   backward_stacks(nullptr), forward_stacks(nullptr)
 {
@@ -176,6 +176,7 @@ FixNVESpin::~FixNVESpin()
   memory->destroy(backward_stacks);
   memory->destroy(sp_old);
   memory->destroy(sp_new);
+  memory->destroy(noise);
   delete [] spin_pairs;
   delete [] locklangevinspin;
   delete [] lockprecessionspin;
@@ -298,18 +299,10 @@ void FixNVESpin::init()
     locksetforcespin = dynamic_cast<FixSetForceSpin *>(setforcefixes.back());
   }
 
-  // the random field of fix langevin/spin is drawn anew for every field
-  //   evaluation, which is inconsistent with the iterations of the midpoint integrator
-
-  if (integrator == MIDPOINT)
-    for (int i = 0; i < nlangspin; i++)
-      if (locklangevinspin[i]->temp_flag)
-        error->all(FLERR, Error::NOLASTLINE, "Fix nve/spin integrator midpoint does not "
-                   "support fix langevin/spin with a non-zero temperature yet");
-
   nevals_step = 0;
   resid_local = 0.0;
   nfail_warn = 0;
+  memory->destroy(noise);    // the number of fix langevin/spin may have changed
 
   // setting the sector variables/lists
 
@@ -597,8 +590,13 @@ void FixNVESpin::ComputeInteractionsSpin(int i)
   // update langevin damping and random force
 
   if (maglangevin_flag) {               // mag. langevin
-    for (int k = 0; k < nlangspin; k++) {
-      locklangevinspin[k]->compute_single_langevin(i,spi,fmi);
+    if (integrator == MIDPOINT) {
+      for (int k = 0; k < nlangspin; k++)
+        locklangevinspin[k]->compute_single_langevin_noise(i,spi,fmi,&noise[i][3*k]);
+    } else {
+      for (int k = 0; k < nlangspin; k++) {
+        locklangevinspin[k]->compute_single_langevin(i,spi,fmi);
+      }
     }
   }
 
@@ -815,6 +813,19 @@ void FixNVESpin::MidpointSpinStep(double h)
     nmid_max = atom->nmax;
     memory->grow(sp_old,nmid_max,3,"nve/spin:sp_old");
     memory->grow(sp_new,nmid_max,3,"nve/spin:sp_new");
+    memory->destroy(noise);
+  }
+
+  // random fields of fix langevin/spin: drawn once per spin and step and kept
+  //   fixed during the iterations (amplitude for a step of length h), which
+  //   corresponds to the Stratonovich interpretation of the stochastic equation
+
+  if (maglangevin_flag) {
+    if (!noise) memory->create(noise,nmid_max,3*nlangspin,"nve/spin:noise");
+    for (int i = 0; i < nlocal; i++)
+      if (mask[i] & groupbit)
+        for (int k = 0; k < nlangspin; k++)
+          locklangevinspin[k]->draw_noise(i,h,&noise[i][3*k]);
   }
 
   // positions may have changed since the last comm:
