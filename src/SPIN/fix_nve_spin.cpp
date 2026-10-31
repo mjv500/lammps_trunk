@@ -369,12 +369,17 @@ void FixNVESpin::initial_integrate(int /*vflag*/)
   }
 
   // update half s for all atoms
+  // sectoring: synchronous sublattice algorithm of Tranchida et al.,
+  //   J Comput Phys 372, 406 (2018), Sec. 5, after Shim and Amar,
+  //   Phys Rev B 71, 125432 (2005): same-index sectors on different procs
+  //   do not interact, so they are updated at the same time
   // communicate ghost positions (and spins) once, since other fixes may have
   //   changed positions or box since the last comm (e.g. fix deform remap x),
   //   then only ghost spins
   // no comm between the forward and the backward update of the last sector:
   //   only ghosts of that sector are out of date then, and atoms of a sector
   //   never interact with ghosts of the same sector on other processors
+  //   (derived here from the sector geometry, not taken from the paper)
 
   nevals_step = 0;
   if (integrator == MIDPOINT) {                 // all spins at once
@@ -614,7 +619,10 @@ void FixNVESpin::ComputeInteractionsSpin(int i)
 }
 
 /* ----------------------------------------------------------------------
-   divide each domain into 8 sectors
+   divide each domain into 2, 4, or 8 sectors, by bisecting it in each
+   direction divided between several procs (Tranchida et al. 2018, Sec. 5,
+   always bisect in all directions and only require sectors wider than
+   the cutoff; the skin is added here, see below)
    for triclinic boxes, the sectors are defined in lamda coordinates
 ---------------------------------------------------------------------- */
 
@@ -648,6 +656,7 @@ void FixNVESpin::sectoring()
   // atoms may move up to half the skin distance between reneighborings,
   //   so the sector width must include the skin to keep spins of
   //   same-index sectors on neighboring procs out of interaction range
+  //   (derived here from the sector geometry, not taken from the paper)
 
   rv += neighbor->skin;
 
@@ -727,6 +736,8 @@ int FixNVESpin::coords2sector(double *x)
 /* ----------------------------------------------------------------------
    rotate the spin s about the field fm during a time dts:
    g = s + dts/2 fm x (s + g) (Cayley transform), so that |g| = |s|
+   single-spin propagator of Omelyan, Mryglod, and Folk, Phys Rev Lett 86,
+   898 (2001), in the form of Eq. (15) of Tranchida et al. (2018)
 ---------------------------------------------------------------------- */
 
 static void RotateSpin(const double *s, const double *fm, double dts, double *g)
@@ -798,7 +809,13 @@ void FixNVESpin::AdvanceSingleSpin(int i)
    midpoints of the previous iterate, so all spins can be updated at
    once and only the ghost spins need to be communicated.
    For a spin energy that is a quadratic function of the spins (exchange,
-   DMI, anisotropy, ...), the converged scheme conserves it exactly.
+   DMI, anisotropy, ...), the converged scheme conserves it exactly
+   (quadratic invariants: Hairer, Lubich, and Wanner, Geometric Numerical
+   Integration, 2nd ed., Springer 2006, Chapter IV).  This is the classical
+   midpoint rule, which is not symplectic for spin systems, unlike the
+   spherical midpoint rule of McLachlan, Modin, and Verdier, Phys Rev E 89,
+   061301 (2014), Eq. (2), which evaluates the field at normalized midpoints;
+   the fixed-point iteration is the one discussed there.
 ---------------------------------------------------------------------- */
 
 void FixNVESpin::MidpointSpinStep(double h)
@@ -819,6 +836,8 @@ void FixNVESpin::MidpointSpinStep(double h)
   // random fields of fix langevin/spin: drawn once per spin and step and kept
   //   fixed during the iterations (amplitude for a step of length h), which
   //   corresponds to the Stratonovich interpretation of the stochastic equation
+  //   (Garcia-Palacios and Lazaro, Phys Rev B 58, 14937 (1998)), as in the
+  //   midpoint schemes of Mentink et al., J Phys Condens Matter 22, 176001 (2010)
 
   if (maglangevin_flag) {
     if (!noise) memory->create(noise,nmid_max,3*nlangspin,"nve/spin:noise");

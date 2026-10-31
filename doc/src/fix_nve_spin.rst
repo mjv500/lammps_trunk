@@ -61,7 +61,8 @@ according to the implementation reported in :ref:`(Omelyan) <Omelyan1>`.
 
 A sectoring method enables this scheme for parallel calculations.
 The implementation of this sectoring algorithm is reported
-in :ref:`(Tranchida) <Tranchida1>`.
+in :ref:`(Tranchida) <Tranchida1>`; it is based on the synchronous
+sublattice algorithm of :ref:`(Shim) <Shim1>`.
 Each processor sub-domain is cut in two halves (sectors) along every
 direction in which the simulation box is divided between several
 processors (see the :doc:`processors <processors>` command), giving 2,
@@ -123,11 +124,14 @@ the magnetic energy for interactions that are quadratic in the spins
 (e.g., exchange, DMI, anisotropy, Zeeman) and the total magnetization for
 isotropic exchange :ref:`(Hairer) <Hairer1>`.  Like the sequential update,
 it is second order in the timestep, and time-reversible when solved
-exactly.  Its error at a given timestep is larger, though: for bcc iron
-at 300 K with a moving lattice, the spin trajectories deviated about 4
-times more from a converged reference than with the sequential update,
-while energy conservation was the same.  It needs more field evaluations per timestep than the
-sequential update (8 instead of 4 with the default settings), but only
+exactly.  Unlike the spherical midpoint rule of :ref:`(McLachlan)
+<McLachlan1>`, which evaluates the field at normalized midpoints, it is
+not symplectic for spin systems.  Its error at a given timestep is
+larger than that of the sequential update: for bcc iron at 300 K with a
+moving lattice, the spin trajectories deviated about 4 times more from a
+converged reference, while energy conservation was the same.  It needs
+more field evaluations per timestep than the sequential update (8
+instead of 4 with the default settings), but only
 one exchange of data between processors per iteration, and no sectors:
 there is no restriction on the size of the processor sub-domains, any
 processor grid or
@@ -141,6 +145,7 @@ temperature, the random field of each spin is drawn once per spin update
 (of length :math:`h`) and kept fixed during the iterations, with an
 amplitude for a time interval :math:`h`.  This corresponds to the
 Stratonovich interpretation of the stochastic equation of motion
+:ref:`(Garcia-Palacios) <GarciaPalacios1>`, as in the midpoint schemes of
 :ref:`(Mentink) <Mentink1>`.  The random numbers then differ from those
 of the sequential update, and with several processors also between
 different numbers of processors.
@@ -215,8 +220,8 @@ iterations = 4, and tol = 0.0.
 
 .. _Omelyan1:
 
-**(Omelyan)** Omelyan, Mryglod, and Folk. Phys. Rev. Lett.
-86(5), 898. (2001).
+**(Omelyan)** Omelyan, Mryglod, and Folk, Phys. Rev. Lett.
+86, 898 (2001).
 
 .. _Tranchida1:
 
@@ -232,3 +237,17 @@ Integration, 2nd edition, Springer (2006), Chapter IV.
 
 **(Mentink)** Mentink, Tretyakov, Fasolino, Katsnelson, and Rasing,
 J Phys Condens Matter, 22, 176001 (2010).
+
+.. _Shim1:
+
+**(Shim)** Shim and Amar, Phys. Rev. B, 71, 125432 (2005).
+
+.. _McLachlan1:
+
+**(McLachlan)** McLachlan, Modin, and Verdier, Phys. Rev. E, 89,
+061301 (2014).
+
+.. _GarciaPalacios1:
+
+**(Garcia-Palacios)** Garcia-Palacios and Lazaro, Phys. Rev. B, 58,
+14937 (1998).
