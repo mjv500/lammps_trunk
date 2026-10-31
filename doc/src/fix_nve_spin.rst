@@ -126,7 +126,10 @@ isotropic exchange :ref:`(Hairer) <Hairer1>`.  Like the sequential update,
 it is second order in the timestep, and time-reversible when solved
 exactly.  Unlike the spherical midpoint rule of :ref:`(McLachlan)
 <McLachlan1>`, which evaluates the field at normalized midpoints, it is
-not symplectic for spin systems.  Its error at a given timestep is
+not symplectic for spin systems in general, so that for interactions
+that are not quadratic in the spins (e.g., cubic anisotropy,
+biquadratic exchange, or *spin/neel*), a bounded energy error over long
+runs is not guaranteed.  Its error at a given timestep is
 larger than that of the sequential update: for bcc iron at 300 K with a
 moving lattice, the spin trajectories deviated about 4 times more from a
 converged reference, while energy conservation was the same.  It needs

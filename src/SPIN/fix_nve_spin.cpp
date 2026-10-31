@@ -812,10 +812,10 @@ void FixNVESpin::AdvanceSingleSpin(int i)
    DMI, anisotropy, ...), the converged scheme conserves it exactly
    (quadratic invariants: Hairer, Lubich, and Wanner, Geometric Numerical
    Integration, 2nd ed., Springer 2006, Chapter IV).  This is the classical
-   midpoint rule, which is not symplectic for spin systems, unlike the
-   spherical midpoint rule of McLachlan, Modin, and Verdier, Phys Rev E 89,
-   061301 (2014), Eq. (2), which evaluates the field at normalized midpoints;
-   the fixed-point iteration is the one discussed there.
+   midpoint rule, which is not symplectic for spin systems in general,
+   unlike the spherical midpoint rule of McLachlan, Modin, and Verdier,
+   Phys Rev E 89, 061301 (2014), Eq. (2), which evaluates the field at
+   normalized midpoints; the fixed-point iteration is the one discussed there.
 ---------------------------------------------------------------------- */
 
 void FixNVESpin::MidpointSpinStep(double h)
