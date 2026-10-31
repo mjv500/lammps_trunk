@@ -123,7 +123,10 @@ the magnetic energy for interactions that are quadratic in the spins
 (e.g., exchange, DMI, anisotropy, Zeeman) and the total magnetization for
 isotropic exchange :ref:`(Hairer) <Hairer1>`.  Like the sequential update,
 it is second order in the timestep, and time-reversible when solved
-exactly.  It needs more field evaluations per timestep than the
+exactly.  Its error at a given timestep is larger, though: for bcc iron
+at 300 K with a moving lattice, the spin trajectories deviated about 4
+times more from a converged reference than with the sequential update,
+while energy conservation was the same.  It needs more field evaluations per timestep than the
 sequential update (8 instead of 4 with the default settings), but only
 one exchange of data between processors per iteration, and no sectors:
 there is no restriction on the size of the processor sub-domains, any
