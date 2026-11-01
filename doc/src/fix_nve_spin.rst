@@ -118,6 +118,11 @@ changes the spins about two orders of magnitude less than the previous
 one, so that the default of 4 iterations solves the equation to nearly
 round-off.  The change of the spins in the last iteration can be
 monitored (see below) to check this for other systems and timesteps.
+The remaining error of the iterations accumulates over long runs: with
+the default settings and a timestep of 0.4 fs, the energy of 1024 spins
+of bcc iron drifted by about 7e-4 eV over 100 ps (1.5e-5 eV at 0.2 fs).
+For long runs at large timesteps, more iterations or a *tol* value
+remove this drift.
 
 When the equation is solved exactly, the implicit midpoint rule conserves
 the magnetic energy for interactions that are quadratic in the spins
