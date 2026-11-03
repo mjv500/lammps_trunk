@@ -4075,6 +4075,7 @@ subdomains
 Subhash
 subhi
 sublo
+sublattice
 subnormals
 Subramaniyan
 subscripted
