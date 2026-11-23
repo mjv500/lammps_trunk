@@ -12,7 +12,7 @@ prerequisites: |
   fix nve/spin
 pre_commands: ""
 post_commands: |
-  fix test solute nve/spin lattice yes integrator midpoint iterations 2
+  fix test solute nve/spin lattice yes integrator midpoint selfconsistent 1
 input_file: in.spin
 input_coeffs: coeffs.spin
 natoms: 54

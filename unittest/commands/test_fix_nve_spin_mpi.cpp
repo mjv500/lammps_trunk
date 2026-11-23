@@ -203,7 +203,7 @@ TEST_F(FixNVESpinMPITest, too_thin)
 TEST_F(FixNVESpinMPITest, midpoint_energy)
 {
     if (!verbose) ::testing::internal::CaptureStdout();
-    init_bcc(6, 6, 6, "4 1 1", "integrator midpoint tol 1e-14 iterations 50");
+    init_bcc(6, 6, 6, "4 1 1", "integrator midpoint tol 1e-14 selfconsistent 49");
     const double err = max_energy_error(4, 50);
     if (!verbose) ::testing::internal::GetCapturedStdout();
     EXPECT_LT(err, EPSILON_ENERGY);
@@ -235,7 +235,7 @@ TEST_F(FixNVESpinMPITest, midpoint_grid)
 }
 
 // midpoint integrator: iteration statistics (2 x 4 field evaluations per step
-// by default, all 2 x iterations without tol)
+// by default, i.e. 2 x (selfconsistent + 1) without tol)
 
 TEST_F(FixNVESpinMPITest, midpoint_vector)
 {
@@ -248,7 +248,7 @@ TEST_F(FixNVESpinMPITest, midpoint_vector)
     lammps_free(nevals);
     lammps_free(resid);
     command("unfix 1");
-    command("fix 1 all nve/spin lattice frozen integrator midpoint iterations 30 tol 1e-12");
+    command("fix 1 all nve/spin lattice frozen integrator midpoint selfconsistent 29 tol 1e-12");
     command("run 10 post no");
     nevals = (double *)lammps_extract_fix(lmp, "1", LMP_STYLE_GLOBAL, LMP_TYPE_VECTOR, 0, 0);
     resid  = (double *)lammps_extract_fix(lmp, "1", LMP_STYLE_GLOBAL, LMP_TYPE_VECTOR, 1, 0);
@@ -271,7 +271,7 @@ TEST_F(FixNVESpinMPITest, midpoint_vector)
 TEST_F(FixNVESpinMPITest, midpoint_langevin)
 {
     if (!verbose) ::testing::internal::CaptureStdout();
-    init_bcc(6, 6, 6, "2 2 1", "integrator midpoint tol 1e-14 iterations 50");
+    init_bcc(6, 6, 6, "2 2 1", "integrator midpoint tol 1e-14 selfconsistent 49");
     command("fix 2 all precession/spin zeeman 0.0 0.0 0.0 1.0");
     command("fix 3 all langevin/spin 300.0 0.1 4711");
     command("run 50 post no");
@@ -279,7 +279,7 @@ TEST_F(FixNVESpinMPITest, midpoint_langevin)
     if (!verbose) ::testing::internal::GetCapturedStdout();
     restart_lammps();
     if (!verbose) ::testing::internal::CaptureStdout();
-    init_bcc(6, 6, 6, "2 2 1", "integrator midpoint tol 1e-13 iterations 40");
+    init_bcc(6, 6, 6, "2 2 1", "integrator midpoint tol 1e-13 selfconsistent 39");
     command("fix 2 all precession/spin zeeman 0.0 0.0 0.0 1.0");
     command("fix 3 all langevin/spin 300.0 0.1 4711");
     command("run 50 post no");

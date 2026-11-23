@@ -87,7 +87,7 @@ FixNVESpin::FixNVESpin(LAMMPS *lmp, int narg, char **arg) :
   secdim[0] = secdim[1] = secdim[2] = 0;
 
   integrator = SEQUENTIAL;
-  niter = 4;
+  niter = 1;
   tol = 0.0;
   nmid_max = 0;
   nevals_step = 0;
@@ -101,9 +101,9 @@ FixNVESpin::FixNVESpin(LAMMPS *lmp, int narg, char **arg) :
 
   danger_flag = 0;
 
-  // no self-consistent iterations of the single spin updates by default
+  // number of self-consistent iterations: default set below, after the integrator is known
 
-  sciter = 0;
+  sciter = -1;
 
   // defining lattice_flag
 
@@ -127,12 +127,6 @@ FixNVESpin::FixNVESpin(LAMMPS *lmp, int narg, char **arg) :
       else if (strcmp(arg[iarg+1],"midpoint") == 0) integrator = MIDPOINT;
       else error->all(FLERR, iarg+1, "Unknown fix nve/spin integrator {}", arg[iarg+1]);
       iarg += 2;
-    } else if (strcmp(arg[iarg],"iterations") == 0) {
-      if (iarg+2 > narg) utils::missing_cmd_args(FLERR, "fix nve/spin iterations", error);
-      niter = utils::inumeric(FLERR,arg[iarg+1],false,lmp);
-      if (niter < 1)
-        error->all(FLERR, iarg+1, "Fix nve/spin iterations must be at least 1");
-      iarg += 2;
     } else if (strcmp(arg[iarg],"tol") == 0) {
       if (iarg+2 > narg) utils::missing_cmd_args(FLERR, "fix nve/spin tol", error);
       tol = utils::numeric(FLERR,arg[iarg+1],false,lmp);
@@ -147,11 +141,12 @@ FixNVESpin::FixNVESpin(LAMMPS *lmp, int narg, char **arg) :
     } else error->all(FLERR,"Illegal fix/nve/spin command");
   }
 
-  // the self-consistent single spin updates are part of the sequential integrator;
-  //   the midpoint integrator is already self-consistent for all spins at once
+  // self-consistent iterations: of each single spin update (sequential), or of
+  //   all spins at once (midpoint); the field is evaluated sciter+1 times per update
+  // defaults: the original update (sequential), 4 field evaluations (midpoint)
 
-  if ((sciter > 0) && (integrator == MIDPOINT))
-    error->all(FLERR, "Fix nve/spin selfconsistent can only be used with integrator sequential");
+  if (sciter < 0) sciter = (integrator == MIDPOINT) ? 3 : 0;
+  niter = sciter + 1;
 
   // the sectoring algorithm is only needed for the sequential integrator in parallel
 
@@ -308,9 +303,10 @@ void FixNVESpin::init()
 
       // the random field would be drawn again at each iteration
 
-      if ((sciter > 0) && locklangevinspin[i]->temp_flag)
-        error->all(FLERR, Error::NOLASTLINE, "Fix nve/spin selfconsistent cannot be used with "
-                   "fix langevin/spin {} at a non-zero temperature", locklangevinspin[i]->id);
+      if ((integrator == SEQUENTIAL) && (sciter > 0) && locklangevinspin[i]->temp_flag)
+        error->all(FLERR, Error::NOLASTLINE, "Fix nve/spin selfconsistent with the sequential "
+                   "integrator cannot be used with fix langevin/spin {} at a non-zero "
+                   "temperature", locklangevinspin[i]->id);
     }
   }
 
@@ -787,6 +783,8 @@ static void RotateSpin(const double *s, const double *fm, double dts, double *g)
    the update, found by sciter fixed-point iterations; this makes the
    update time-symmetric also when the field on spin i depends on s_i
    (anisotropy, biquadratic exchange, ...)
+   with tol > 0, the iterations stop once no component of the new spin
+   changes by more than tol between two iterations
 ---------------------------------------------------------------------- */
 
 void FixNVESpin::UpdateSingleSpin(int i)
@@ -794,7 +792,7 @@ void FixNVESpin::UpdateSingleSpin(int i)
   int *sametag = atom->sametag;
   double **sp = atom->sp;
   double **fm = atom->fm;
-  double s0[3],g[3];
+  double s0[3],g[3],gold[3];
 
   ComputeInteractionsSpin(i);
 
@@ -804,6 +802,14 @@ void FixNVESpin::UpdateSingleSpin(int i)
     s0[2] = sp[i][2];
     for (int k = 0; k < sciter; k++) {
       RotateSpin(s0,fm[i],dts,g);
+      if ((tol > 0.0) && (k > 0)) {
+        const double resid = MAX(MAX(fabs(g[0] - gold[0]),fabs(g[1] - gold[1])),
+                                 fabs(g[2] - gold[2]));
+        if (resid < tol) break;    // fm[i] is the field at the converged midpoint
+      }
+      gold[0] = g[0];
+      gold[1] = g[1];
+      gold[2] = g[2];
       sp[i][0] = 0.5*(s0[0] + g[0]);
       sp[i][1] = 0.5*(s0[1] + g[1]);
       sp[i][2] = 0.5*(s0[2] + g[2]);
@@ -975,8 +981,8 @@ void FixNVESpin::MidpointSpinStep(double h)
     nfail_warn = 1;
     if (comm->me == 0)
       error->warning(FLERR, "Fix nve/spin midpoint integrator: the spins did not converge to "
-                     "tol = {} within {} iterations at step {}. Increase the number of "
-                     "iterations or reduce the timestep", tol, niter, update->ntimestep);
+                     "tol = {} with selfconsistent {} at step {}. Increase selfconsistent "
+                     "or reduce the timestep", tol, sciter, update->ntimestep);
   }
 }
 

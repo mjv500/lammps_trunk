@@ -279,6 +279,18 @@ target_link_libraries(test_mpi_load_balancing PRIVATE lammps GTest::GMock)
 add_mpi_test(NAME MPILoadBalancing NUM_PROCS 4 COMMAND $<TARGET_FILE:test_mpi_load_balancing>)
 
 if(PKG_SPIN)
+  # spin length conservation and keywords of the fix nve/spin integrators,
+  # in serial and with 4 MPI processes (error messages are checked in serial only)
+  add_executable(test_fix_nve_spin test_fix_nve_spin.cpp)
+  target_link_libraries(test_fix_nve_spin PRIVATE lammps GTest::GMock)
+  add_test(NAME FixNVESpin COMMAND test_fix_nve_spin)
+  set_tests_properties(FixNVESpin PROPERTIES LABELS "spin")
+  add_mpi_test(NAME FixNVESpinNormMPI NUM_PROCS 4 COMMAND $<TARGET_FILE:test_fix_nve_spin>
+               --gtest_filter=-FixNVESpinTest.InvalidSettings)
+  if(TEST FixNVESpinNormMPI)
+    set_tests_properties(FixNVESpinNormMPI PROPERTIES LABELS "mpi;spin")
+  endif()
+
   add_executable(test_fix_nve_spin_mpi test_fix_nve_spin_mpi.cpp)
   target_link_libraries(test_fix_nve_spin_mpi PRIVATE lammps GTest::GMock)
   add_mpi_test(NAME FixNVESpinMPI NUM_PROCS 4 COMMAND $<TARGET_FILE:test_fix_nve_spin_mpi>)

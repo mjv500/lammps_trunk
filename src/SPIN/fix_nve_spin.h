@@ -60,12 +60,12 @@ class FixNVESpin : public Fix {
 
   double dtv, dtf, dts;    // velocity, force, and spin timesteps
 
-  int sciter;    // # of self-consistent iterations of each single spin update
+  int sciter;    // # of self-consistent iterations of each spin update (both integrators)
 
   enum { SEQUENTIAL, MIDPOINT };
   int integrator;      // spin integration scheme
-  int niter;           // (max) number of field evaluations per midpoint spin step
-  double tol;          // convergence criterion of the midpoint iteration (0 = fixed niter)
+  int niter;           // (max) number of field evaluations per midpoint spin step (sciter+1)
+  double tol;          // convergence criterion of the iterations (0 = always sciter iterations)
   int nmid_max;        // size of sp_old, sp_new
   double **sp_old;     // spins at the beginning of a midpoint spin step
   double **sp_new;     // current iterate of the spins at the end of the step

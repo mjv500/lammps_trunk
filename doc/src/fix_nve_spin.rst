@@ -13,23 +13,22 @@ Syntax
 * ID, group-ID are documented in :doc:`fix <fix>` command
 * nve/spin = style name of this fix command
 * zero or more keyword/value pairs may be appended
-* keyword = *lattice* or *selfconsistent* or *integrator* or *iterations* or *tol*
+* keyword = *lattice* or *integrator* or *selfconsistent* or *tol*
 
   .. parsed-literal::
 
        *lattice* value = *moving* or *frozen*
          moving = integrate both spin and atomic degrees of freedom
          frozen = integrate spins on a fixed lattice
-       *selfconsistent* value = N
-         N = number of iterations for the field of each single spin update (>= 0)
        *integrator* value = *sequential* or *midpoint*
          sequential = update the spins one after the other
          midpoint = update all spins at once with the implicit midpoint rule
-       *iterations* value = N
-         N = number of field evaluations per spin update (*midpoint* only)
+       *selfconsistent* value = N
+         N = number of iterations of the field at the midpoint of each spin
+             update (>= 0), i.e. N+1 field evaluations per update
        *tol* value = tolerance
          tolerance = stop the iterations when no spin component changes by more
-                     than this value (*midpoint* only; 0.0 = always do N iterations)
+                     than this value (0.0 = always do N iterations)
 
 Examples
 """"""""
@@ -39,7 +38,7 @@ Examples
    fix 3 all nve/spin lattice moving
    fix 1 all nve/spin lattice frozen
    fix 1 all nve/spin lattice moving integrator midpoint
-   fix 1 all nve/spin integrator midpoint iterations 20 tol 1.0e-12
+   fix 1 all nve/spin integrator midpoint selfconsistent 19 tol 1.0e-12
    fix 1 all nve/spin lattice frozen selfconsistent 2
 
 Description
@@ -95,7 +94,7 @@ parallel efficiency when there are few atoms per processor.
 
 .. versionadded:: TBD
 
-   *selfconsistent* keyword
+   *selfconsistent* and *tol* keywords
 
 Each spin is rotated about its precession field, which is computed just
 before its update and held constant during the rotation.  If this field
@@ -118,15 +117,15 @@ anisotropy only, *N* = 2 made the run about 2.4 times slower, and with
 an EAM potential and a moving lattice about 1.15 times slower.  For
 interactions that do not depend on
 the spin itself (e.g. Heisenberg exchange, DMI, Zeeman), the results do
-not change.  The default *N* = 0 gives the original update.  The
-*selfconsistent* keyword only applies to the sequential update: the
-*midpoint* integrator below evaluates the fields of all spins at their
-midpoints at once, and corresponds to applying the same midpoint
-condition to all spins simultaneously instead of one spin at a time.
+not change.  The default *N* = 0 gives the original update.  The *tol*
+keyword optionally stops the iterations of a spin update earlier, once
+no component of the new spin changes by more than *tol* between two
+iterations; no warning is printed if this is not reached within *N*
+iterations.
 
 .. versionadded:: TBD
 
-   *integrator midpoint*, *iterations*, and *tol* keywords
+   *integrator midpoint* keyword
 
 With *integrator midpoint*, each of the two spin updates per timestep
 (over half a timestep, :math:`h = \Delta t/2`) is done for all spins at
@@ -139,23 +138,27 @@ once with the implicit midpoint rule
 
 where :math:`\vec{\omega}_i(\vec{m})` is the magnetic field (precession
 vector) acting on spin *i*, computed from the midpoint values of all
-spins.  The new spin is obtained as a rotation of the old one, so that
-the length of each spin is preserved exactly.  The equation is solved by
+spins.  This is the same midpoint condition as with the *selfconsistent*
+keyword above, but imposed on all spins simultaneously instead of on one
+spin at a time with the other spins held fixed.  The new spin is
+obtained as a rotation of the old one, so that the length of each spin
+is preserved exactly.  The equation is solved by
 iteration: each iteration computes the fields of all spins from the
-current estimate of the midpoints and updates all spins.  The *iterations*
-keyword sets the number of iterations (field evaluations), and the *tol*
-keyword optionally stops the iterations earlier once no spin component
-changes by more than *tol* (this requires an extra global sum per
-iteration).  If the iterations do not converge to *tol*, a warning is
-printed.  For timesteps of about 0.1 fs in bcc iron, each iteration
-changes the spins about two orders of magnitude less than the previous
-one, so that the default of 4 iterations solves the equation to nearly
-round-off.  The change of the spins in the last iteration can be
+current estimate of the midpoints and updates all spins.  As for the
+sequential update, the *selfconsistent* keyword sets the number *N* of
+iterations after the first field evaluation (*N* + 1 field evaluations
+per spin update, default *N* = 3), and the *tol* keyword optionally
+stops the iterations earlier once no spin component changes by more
+than *tol* (this requires an extra global sum per iteration).  If the
+iterations do not converge to *tol*, a warning is printed.  For
+timesteps of about 0.1 fs in bcc iron, each iteration changes the spins
+about two orders of magnitude less than the previous one, so that the
+default of 4 field evaluations solves the equation to nearly round-off.  The change of the spins in the last iteration can be
 monitored (see below) to check this for other systems and timesteps.
 The remaining error of the iterations accumulates over long runs: with
 the default settings and a timestep of 0.4 fs, the energy of 1024 spins
 of bcc iron drifted by about 7e-4 eV over 100 ps (1.5e-5 eV at 0.2 fs).
-For long runs at large timesteps, more iterations or a *tol* value
+For long runs at large timesteps, a larger *N* or a *tol* value
 remove this drift.
 
 When the equation is solved exactly, the implicit midpoint rule conserves
@@ -224,7 +227,8 @@ info.
 
 The *selfconsistent* keyword cannot be used with :doc:`fix langevin/spin
 <fix_langevin_spin>` at a non-zero temperature, since the random field
-would be drawn again at each iteration, nor with *integrator midpoint*.
+would be drawn again at each iteration.  This restriction does not apply
+to *integrator midpoint*.
 
 To use the spin algorithm, it is necessary to define a map with
 the atom_modify command. Typically, by adding the command:
@@ -259,8 +263,9 @@ Related commands
 Default
 """""""
 
-The option defaults are lattice = moving, selfconsistent = 0,
-integrator = sequential, iterations = 4, and tol = 0.0.
+The option defaults are lattice = moving, integrator = sequential,
+selfconsistent = 0 with *integrator sequential* and 3 with *integrator
+midpoint*, and tol = 0.0.
 
 ----------
 

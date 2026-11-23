@@ -12,7 +12,7 @@ prerequisites: |
   fix langevin/spin
 pre_commands: ""
 post_commands: |
-  fix test solute nve/spin lattice yes integrator midpoint iterations 2
+  fix test solute nve/spin lattice yes integrator midpoint selfconsistent 1
   fix lang all langevin/spin 300.0 0.1 48279
 input_file: in.spin
 input_coeffs: coeffs.spin
