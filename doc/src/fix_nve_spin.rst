@@ -13,13 +13,15 @@ Syntax
 * ID, group-ID are documented in :doc:`fix <fix>` command
 * nve/spin = style name of this fix command
 * zero or more keyword/value pairs may be appended
-* keyword = *lattice* or *integrator* or *iterations* or *tol*
+* keyword = *lattice* or *selfconsistent* or *integrator* or *iterations* or *tol*
 
   .. parsed-literal::
 
        *lattice* value = *moving* or *frozen*
          moving = integrate both spin and atomic degrees of freedom
          frozen = integrate spins on a fixed lattice
+       *selfconsistent* value = N
+         N = number of iterations for the field of each single spin update (>= 0)
        *integrator* value = *sequential* or *midpoint*
          sequential = update the spins one after the other
          midpoint = update all spins at once with the implicit midpoint rule
@@ -38,6 +40,7 @@ Examples
    fix 1 all nve/spin lattice frozen
    fix 1 all nve/spin lattice moving integrator midpoint
    fix 1 all nve/spin integrator midpoint iterations 20 tol 1.0e-12
+   fix 1 all nve/spin lattice frozen selfconsistent 2
 
 Description
 """""""""""
@@ -89,6 +92,37 @@ The sequential update of the spins described above is the default
 updated before those of the next one, the spin update requires about 30
 exchanges of data between processors per timestep, which limits the
 parallel efficiency when there are few atoms per processor.
+
+.. versionadded:: TBD
+
+   *selfconsistent* keyword
+
+Each spin is rotated about its precession field, which is computed just
+before its update and held constant during the rotation.  If this field
+depends on the spin itself, as for magnetic anisotropy (:doc:`fix
+precession/spin <fix_precession_spin>` with *anisotropy* or *cubic*),
+:doc:`biquadratic exchange <pair_spin_exchange>`, or :doc:`pair spin/neel
+<pair_spin_neel>`, this update is no longer time-symmetric, and the
+energy drifts steadily, at a rate proportional to the timestep.  With
+the *selfconsistent* keyword, the field of each spin update is instead
+evaluated at the midpoint between the old and the new spin direction,
+found by *N* iterations, each of which computes the field on that spin
+once more.  This removes the drift.  In tests with 1024 spins of bcc
+iron at 300 K on a frozen lattice, with timesteps of 0.1 to 0.4 fs,
+*N* = 2 reduced the energy drift by a factor of 10\ :sup:`5` or more
+for anisotropy and biquadratic exchange, and of 10\ :sup:`3` or more
+for *spin/neel*.  The energy was then conserved to round-off for
+uniaxial anisotropy and, with *N* = 4, for biquadratic exchange.  Each
+iteration adds one field evaluation per spin update: with exchange and
+anisotropy only, *N* = 2 made the run about 2.4 times slower, and with
+an EAM potential and a moving lattice about 1.15 times slower.  For
+interactions that do not depend on
+the spin itself (e.g. Heisenberg exchange, DMI, Zeeman), the results do
+not change.  The default *N* = 0 gives the original update.  The
+*selfconsistent* keyword only applies to the sequential update: the
+*midpoint* integrator below evaluates the fields of all spins at their
+midpoints at once, and corresponds to applying the same midpoint
+condition to all spins simultaneously instead of one spin at a time.
 
 .. versionadded:: TBD
 
@@ -188,6 +222,10 @@ This fix style can only be used if LAMMPS was built with the SPIN
 package.  See the :doc:`Build package <Build_package>` page for more
 info.
 
+The *selfconsistent* keyword cannot be used with :doc:`fix langevin/spin
+<fix_langevin_spin>` at a non-zero temperature, since the random field
+would be drawn again at each iteration, nor with *integrator midpoint*.
+
 To use the spin algorithm, it is necessary to define a map with
 the atom_modify command. Typically, by adding the command:
 
@@ -221,8 +259,8 @@ Related commands
 Default
 """""""
 
-The option defaults are lattice = moving, integrator = sequential,
-iterations = 4, and tol = 0.0.
+The option defaults are lattice = moving, selfconsistent = 0,
+integrator = sequential, iterations = 4, and tol = 0.0.
 
 ----------
 
